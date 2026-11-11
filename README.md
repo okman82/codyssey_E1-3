@@ -19,8 +19,8 @@ AI가 이미지를 판별할 때 쓰는 **MAC(Multiply-Accumulate) 연산**을 �
 ## 2. 실행 방법
 
 ```bash
-git clone https://github.com/<아이디>/<저장소명>.git
-cd <저장소명>
+git clone https://github.com/okman82/codyssey_E1-3.git
+cd <codyssey_E1-3>
 python main.py        # macOS/Linux에서는 python3 main.py
 ```
 
