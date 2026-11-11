@@ -20,7 +20,7 @@ AI가 이미지를 판별할 때 쓰는 **MAC(Multiply-Accumulate) 연산**을 �
 
 ```bash
 git clone https://github.com/okman82/codyssey_E1-3.git
-cd <codyssey_E1-3>
+cd codyssey_E1-3
 python main.py        # macOS/Linux에서는 python3 main.py
 ```
 
@@ -60,9 +60,9 @@ python main.py        # macOS/Linux에서는 python3 main.py
 |---|---|---|
 | 1. 데이터 구조 | `create_matrix`, `get_value`, `set_value`, `is_valid_matrix` | N×N 2차원 리스트 생성, 위치별 읽기/쓰기, 크기 검증 |
 | 2. 패턴 생성기 | `make_cross`, `make_x` | N을 주면 십자가/X 패턴 자동 생성 (보너스 2) |
-| 3. 라벨 정규화 | `normalize_label` | `+`, `cross` → `Cross` / `x` → `X` |
+| 3. 라벨 정규화 | `STANDARD_LABELS`, `LABEL_ALIASES`, `normalize_label` | 표준 라벨 목록과 표기 매핑 표, `+`, `cross` → `Cross` / `x` → `X` |
 | 4. MAC 연산 | `mac`, `flatten`, `mac_flat` | 곱하고 더하기 (2차원 / 1차원) |
-| 5. 판정 | `judge` | epsilon 기반 동점 처리 |
+| 5. 판정 | `judge` | 라벨별 점수 중 1등 선택, epsilon 기반 동점 처리 (라벨 수와 무관) |
 | 6. 성능 측정 | `measure_average_ms`, `run_performance` | 10회 반복 평균 시간(ms) 표 |
 | 7~9. 모드 | `mode_user_input`, `mode_json_analysis`, `mode_bonus_compare` | 메뉴별 실행 흐름 |
 
@@ -100,24 +100,49 @@ def mac(pattern, filter_matrix):
 | 필터 키 | `cross` | `Cross` |
 | 필터 키 | `x` | `X` |
 
-`normalize_label()`이 앞뒤 공백을 지우고 소문자로 바꾼 뒤 표준 라벨로 변환합니다.
+라벨 규칙은 코드 한 곳에 **표(딕셔너리)**로 모아 두었습니다.
+
+```python
+STANDARD_LABELS = ["Cross", "X"]     # 프로그램 안에서 쓰는 표준 라벨
+
+LABEL_ALIASES = {                    # 데이터 표기 → 표준 라벨 (키는 소문자)
+    "+": "Cross",
+    "cross": "Cross",
+    "x": "X",
+}
+
+def normalize_label(label):
+    text = str(label).strip().lower()   # 앞뒤 공백 제거 + 소문자로 통일
+    return LABEL_ALIASES.get(text)      # 표에 없으면 None → 그 케이스 FAIL
+```
+
+`normalize_label()`이 앞뒤 공백을 지우고 소문자로 바꾼 뒤 매핑 표에서 표준 라벨을 찾습니다.
+그래서 `CROSS`, ` + `, `X`처럼 대소문자나 공백이 달라도 같은 라벨이 됩니다.
 판정 결과도 `Cross` / `X`로 나오므로, **같은 기준끼리 비교**해야 PASS/FAIL이 올바르게 나옵니다.
 정규화하지 않으면 판정 `Cross`와 expected `+`를 비교해 모든 케이스가 FAIL이 됩니다.
+
+필터 로드(`load_filters`), 점수 계산·출력(`analyze_pattern`), 판정(`judge`)은 모두 `STANDARD_LABELS` 목록을 따라 반복합니다.
+따라서 새 라벨을 추가할 때는 **표 두 개와 data.json만 고치면** 됩니다. 구체적인 순서는 [4-8. 새 라벨 추가 절차](#4-8-새-라벨-추가-절차)에 정리했습니다.
 
 ### 4-4. 동점 처리 정책 (epsilon)
 
 ```python
 EPSILON = 1e-9
 
-def judge(score_a, score_b, label_a, label_b):
-    if abs(score_a - score_b) < EPSILON:
-        return "UNDECIDED"
+def judge(scores):                    # scores = {"Cross": 0.9, "X": 0.8999...}
+    # ① 가장 높은 점수의 라벨 찾기
     ...
+    # ② 1등과 차이가 EPSILON보다 작은 다른 라벨이 있으면 동점
+    for label, score in scores.items():
+        if label != best_label and abs(best_score - score) < EPSILON:
+            return "UNDECIDED"
+    return best_label
 ```
 
 - 실수 계산은 `0.1 + 0.2 = 0.30000000000000004`처럼 아주 작은 오차가 생깁니다.
 - 그래서 `==` 대신 **두 점수의 차이가 1e-9보다 작으면 동점(UNDECIDED)**으로 봅니다.
 - 동점은 Cross도 X도 아니므로 expected와 다르게 되어 **FAIL**로 처리합니다.
+- 점수를 `{라벨: 점수}` 딕셔너리로 받기 때문에 라벨이 3개 이상이어도 같은 규칙으로 판정합니다. 모드 1도 `judge({"A": a, "B": b})`로 같은 함수를 씁니다.
 
 ### 4-5. 모드 2 검증 순서 (케이스 단위 FAIL)
 
@@ -156,6 +181,117 @@ avg_ms = (end - start) * 1000 / 10
 - 입력·출력·파일 읽기는 빼고 **MAC 함수 호출 구간만** 잽니다.
 - 한 번은 너무 빨라 측정값이 흔들리므로 **10회 반복 후 평균**을 냅니다.
 - 측정용 데이터는 패턴 생성기(`make_cross`, `make_x`)로 크기만 바꿔 만들어, 모양이 아닌 **크기의 영향만** 비교합니다.
+
+### 4-8. 새 라벨 추가 절차
+
+새 라벨은 두 종류로 나눠서 추가합니다.
+
+| 경우 | 예 | 해야 할 단계 |
+|---|---|---|
+| **A. 기존 라벨의 새 표기** | expected에 `plus`, `십자가`가 들어옴 | 1(매핑) → 2(정규화 검증) → 5(테스트) → 6(재실행) |
+| **B. 새 모양 라벨** | `T` 모양을 새로 판별 | 1 → 2 → 3 → 4 → 5 → 6 전부 |
+
+#### 1단계. 매핑 추가 (`main.py` 3번 구역)
+
+```python
+STANDARD_LABELS = ["Cross", "X", "T"]    # 경우 B만: 표준 라벨 추가
+
+LABEL_ALIASES = {
+    "+": "Cross",
+    "cross": "Cross",
+    "x": "X",
+    "plus": "Cross",                     # 경우 A: 새 표기 → 기존 라벨
+    "t": "T",                            # 경우 B: 새 라벨의 표기
+}
+```
+
+- 매핑 표의 키는 **앞뒤 공백 없는 소문자**로 적습니다. 입력을 소문자로 바꾼 뒤 찾기 때문에 `"Plus"`처럼 대문자로 적으면 절대 찾지 못합니다.
+- 표준 라벨 자신의 소문자(`"t"`)도 키로 넣어야 expected에 `T`라고 적은 데이터도 인식됩니다.
+- 키는 **하나의 라벨에만** 연결합니다. 같은 키를 두 번 적으면 오류 없이 뒤의 값으로 덮어써지므로 추가 전에 표 전체를 확인합니다.
+
+#### 2단계. 정규화 검증
+
+1단계를 마친 뒤, 데이터를 돌리기 전에 정규화 함수만 따로 확인합니다. (`main.py`는 `if __name__ == "__main__":`으로 감싸 두어 메뉴 없이 함수만 불러올 수 있습니다.)
+
+```bash
+python -c "from main import normalize_label as n; print([n(v) for v in ['plus', ' T ', 't', '+', 'x', '?']])"
+```
+
+```text
+['Cross', 'T', 'T', 'Cross', 'X', None]
+```
+
+- 새 표기: 대문자·공백이 섞여도(`' T '`) 원하는 라벨이 나오는지
+- 기존 표기: `+`, `x`의 결과가 **그대로인지**
+- 모르는 표기: `?`가 `None`인지 (`None`이면 그 케이스는 `알 수 없는 expected 라벨`로 FAIL)
+
+#### 3단계. 판정·출력 확인 (경우 B)
+
+판정과 출력 코드는 고치지 않아도 됩니다. 모두 `STANDARD_LABELS`를 따라 반복하기 때문입니다.
+
+| 부분 | 함수 | 새 라벨 T를 추가하면 |
+|---|---|---|
+| 필터 로드 | `load_filters` | `✓ size_5 필터 로드 완료 (Cross, X, T)`처럼 T도 필수 필터로 검사 |
+| 점수 계산·출력 | `analyze_pattern` | `T 점수: …` 줄이 자동으로 추가 |
+| 판정 | `judge` | Cross·X·T 중 1등을 고르고, 1등과 1e-9 미만으로 붙은 라벨이 있으면 UNDECIDED |
+| 결과 비교 | `analyze_pattern` | 판정 `T`와 정규화된 expected `T`를 비교해 PASS/FAIL |
+
+확인할 것은 **출력 순서**입니다. 점수는 `STANDARD_LABELS`에 적은 순서대로 출력되므로 원하는 순서로 적습니다.
+
+#### 4단계. 필터 데이터 추가 (`data.json`, 경우 B)
+
+```json
+"size_5": {
+  "cross": [[...]],
+  "x": [[...]],
+  "t": [[1, 1, 1, 1, 1], [0, 0, 1, 0, 0], [0, 0, 1, 0, 0], [0, 0, 1, 0, 0], [0, 0, 1, 0, 0]]
+}
+```
+
+- 필터 키는 매핑 표에 있는 표기(`t` 또는 `T`)여야 합니다. 표에 없으면 `알 수 없는 필터 이름`으로 건너뜁니다.
+- **모든 크기(size_5, size_13, size_25)에 새 필터를 넣어야 합니다.** 하나라도 빠지면 그 크기는 `필터 로드 실패 (없는 필터: T)`가 되고, 그 크기의 패턴은 전부 `size_N 필터가 없음`으로 FAIL됩니다.
+- 필터는 N×N 크기, 숫자 값이어야 합니다. 크기가 다르면 `T 필터 크기 오류`로 로드되지 않습니다.
+
+#### 5단계. 패턴·테스트 추가 (`data.json`)
+
+새 라벨이 실제로 맞게 판정되는지 확인할 케이스를 크기마다 하나 이상 넣습니다.
+
+```json
+"size_5_3": { "input": [[1, 1, 1, 1, 1], [0, 0, 1, 0, 0], ...], "expected": "T" },
+"size_5_4": { "input": [[0, 0, 1, 0, 0], ...], "expected": "PLUS" }
+```
+
+| 테스트 | 목적 | 기대 결과 |
+|---|---|---|
+| 새 라벨 정답 케이스 (`size_5_3`) | 새 필터가 자기 모양에 1등 점수를 주는지 | `판정: T \| expected: T \| PASS` |
+| 새 표기 케이스 (`size_5_4`, 경우 A) | 대문자 `PLUS`도 정규화되는지 | `expected: Cross \| PASS` |
+| 모르는 표기 케이스 (선택) | 표에 없는 표기를 안전하게 처리하는지 | `알 수 없는 expected 라벨` FAIL, 프로그램 계속 진행 |
+
+#### 6단계. 전체 재실행과 회귀 확인
+
+```bash
+python main.py      # 2 선택
+```
+
+- **새 케이스**가 PASS인지 확인합니다.
+- **기존 케이스의 결과가 바뀌지 않았는지** 반드시 확인합니다. 새 필터가 기존 패턴에 더 높은 점수를 줄 수 있습니다.
+- 결과가 달라졌다면 필터 값(가중치)을 조정하고 4단계부터 다시 합니다.
+- 마지막으로 README의 [4-3 라벨 표](#4-3-라벨-정규화), [5. 실행 결과](#5-실행-결과), [7. 재현성 체크](#7-재현성-체크)를 새 결과로 고칩니다.
+
+#### 실험 기록: 절차대로 `T`와 `plus`를 추가해 본 결과
+
+저장소의 파일은 그대로 두고 **복사본**에서 1~6단계를 그대로 진행했습니다.
+
+| 단계 | 결과 |
+|---|---|
+| 1·2. 매핑 + 정규화 검증 | `plus`→Cross, `' T '`·`t`→T, 기존 `+`·`x` 변화 없음 ✅ |
+| 4. size_5에만 T 필터 추가 | `✗ size_13 필터 로드 실패 (없는 필터: T)` → size_13·25 패턴 4개 전부 FAIL ⚠️ |
+| 5. `size_5_3`(T 입력, expected `T`) | Cross 4.9 / X 0.3 / **T 9.0** → `T \| PASS` ✅ |
+| 5. `size_5_4`(십자가 입력, expected `PLUS`) | `Cross \| expected: Cross \| PASS` ✅ |
+| 6. 회귀: 기존 `size_5_1`(X 입력) | Cross 0.9 / X 0.8999999999999999 / **T 3.0** → 판정 `T`, 원래 UNDECIDED였던 결과가 바뀜 ⚠️ |
+
+이 실험으로 4단계의 "모든 크기에 필터 추가"와 6단계의 "기존 결과 회귀 확인"이 왜 필요한지 확인했습니다.
+특히 `size_5_1`처럼 **새 필터가 기존 패턴과 겹치는 칸이 많으면 기존 판정이 뒤집힙니다.** 그래서 새 라벨을 추가할 때는 새 케이스의 PASS만 보지 않고 전체 결과를 비교해야 합니다.
 
 ## 5. 실행 결과
 
@@ -302,6 +438,8 @@ X 점수: 0.1
 | 모드 2: 받은 data.json → 총 6 / 통과 3 / 실패 3 (실패는 모두 동점 규칙) | ✅ |
 | 모드 2: 패턴 크기를 일부러 바꿈 → `크기 불일치` 케이스 단위 FAIL, 프로그램 계속 진행 | ✅ |
 | 모드 2: data.json 없음 / JSON 문법 오류 → 안내 후 메뉴 복귀 | ✅ |
+| 정규화: `+`, ` + `, `CROSS`, `x`, ` X ` → Cross/X, `?` → None | ✅ |
+| 라벨 확장(복사본): `T`·`plus` 추가 → 새 케이스 PASS, 빠진 크기·기존 판정 변화 감지 | ✅ |
 
 ## 8. 배운 점
 

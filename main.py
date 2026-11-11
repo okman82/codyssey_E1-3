@@ -109,14 +109,22 @@ def make_x(n):
 # =========================================================
 # 3. 라벨 정규화: 여러 표기를 표준 라벨(Cross / X)로 통일
 # =========================================================
+# 프로그램 안에서 쓰는 표준 라벨 목록 (판정·출력·필터 로드가 모두 이 목록을 따른다)
+STANDARD_LABELS = ["Cross", "X"]
+
+# 데이터에 나올 수 있는 표기 → 표준 라벨 매핑 표
+# ※ 키는 반드시 '앞뒤 공백 없는 소문자'로 적는다. (입력도 소문자로 바꾼 뒤 찾기 때문)
+LABEL_ALIASES = {
+    "+": "Cross",
+    "cross": "Cross",
+    "x": "X",
+}
+
+
 def normalize_label(label):
-    """'+', 'cross' → 'Cross' / 'x' → 'X'. 알 수 없는 값이면 None."""
+    """매핑 표에서 표준 라벨을 찾아 돌려준다. 표에 없는 표기면 None."""
     text = str(label).strip().lower()   # 앞뒤 공백 제거 + 소문자로 통일
-    if text in ("+", "cross"):
-        return "Cross"
-    if text == "x":
-        return "X"
-    return None
+    return LABEL_ALIASES.get(text)      # 없으면 None
 
 
 # =========================================================
@@ -152,13 +160,23 @@ def mac_flat(flat_pattern, flat_filter):
 # =========================================================
 # 5. 점수 비교 정책 (epsilon 기반 동점 처리)
 # =========================================================
-def judge(score_a, score_b, label_a, label_b):
-    """두 점수를 비교해 더 큰 쪽 라벨을 돌려준다. 차이가 EPSILON보다 작으면 동점."""
-    if abs(score_a - score_b) < EPSILON:
-        return "UNDECIDED"
-    if score_a > score_b:
-        return label_a
-    return label_b
+def judge(scores):
+    """scores = {"라벨": 점수, ...} 에서 점수가 가장 높은 라벨을 돌려준다.
+    1등과 점수 차이가 EPSILON보다 작은 다른 라벨이 있으면 동점(UNDECIDED).
+    라벨이 2개든 3개 이상이든 같은 방식으로 동작한다."""
+    # ① 가장 높은 점수 찾기
+    best_label = None
+    best_score = None
+    for label, score in scores.items():
+        if best_score is None or score > best_score:
+            best_label = label
+            best_score = score
+
+    # ② 1등과 거의 같은 점수가 또 있으면 판정 불가
+    for label, score in scores.items():
+        if label != best_label and abs(best_score - score) < EPSILON:
+            return "UNDECIDED"
+    return best_label
 
 
 # =========================================================
@@ -239,7 +257,7 @@ def mode_user_input():
         mac(pattern, filter_b)
     avg_ms = (time.perf_counter() - start) * 1000 / REPEAT_COUNT
 
-    verdict = judge(score_a, score_b, "A", "B")
+    verdict = judge({"A": score_a, "B": score_b})
     print(f"A 점수: {score_a}")
     print(f"B 점수: {score_b}")
     print(f"연산 시간(평균/{REPEAT_COUNT}회): {avg_ms:.4f} ms")
@@ -276,7 +294,8 @@ def get_size_from_key(key):
 
 
 def load_filters(raw_filters):
-    """filters 부분을 읽어 {N: {"Cross": 행렬, "X": 행렬}} 형태로 만든다."""
+    """filters 부분을 읽어 {N: {"Cross": 행렬, "X": 행렬, ...}} 형태로 만든다.
+    STANDARD_LABELS의 필터가 하나라도 없으면 그 크기는 사용하지 않는다."""
     filters = {}
     if not isinstance(raw_filters, dict):
         print("✗ filters 항목이 없거나 형식이 잘못되었습니다.")
@@ -298,11 +317,17 @@ def load_filters(raw_filters):
             else:
                 loaded[label] = matrix
 
-        if "Cross" in loaded and "X" in loaded:
+        missing = []
+        for label in STANDARD_LABELS:
+            if label not in loaded:
+                missing.append(label)
+
+        label_text = ", ".join(STANDARD_LABELS)
+        if not missing:
             filters[n] = loaded
-            print(f"✓ {size_key} 필터 로드 완료 (Cross, X)")
+            print(f"✓ {size_key} 필터 로드 완료 ({label_text})")
         else:
-            print(f"✗ {size_key} 필터 로드 실패 (Cross와 X가 모두 필요)")
+            print(f"✗ {size_key} 필터 로드 실패 (없는 필터: {', '.join(missing)})")
     return filters
 
 
@@ -347,13 +372,12 @@ def analyze_pattern(key, case, filters):
         print(f"FAIL: {reason}")
         return reason
 
-    # ⑥ MAC 연산 → 판정 → PASS/FAIL
-    cross_score = mac(pattern, filters[n]["Cross"])
-    x_score = mac(pattern, filters[n]["X"])
-    verdict = judge(cross_score, x_score, "Cross", "X")
-
-    print(f"Cross 점수: {cross_score}")
-    print(f"X 점수: {x_score}")
+    # ⑥ 표준 라벨마다 MAC 연산 → 판정 → PASS/FAIL
+    scores = {}
+    for label in STANDARD_LABELS:
+        scores[label] = mac(pattern, filters[n][label])
+        print(f"{label} 점수: {scores[label]}")
+    verdict = judge(scores)
     if verdict == expected:
         print(f"판정: {verdict} | expected: {expected} | PASS")
         return None
