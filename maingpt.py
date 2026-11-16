@@ -82,6 +82,8 @@ print("전체 테스트:", passed + failed)
 print("성공:", passed)
 print("실패:", failed)
 
+https://chatgpt.com/share/6afac62e-c3f0-83ee-836e-6b134a541e8a
+
 
 # print(classify(1.0, 5.0))
 # print(classify(5.0, 1.0))
